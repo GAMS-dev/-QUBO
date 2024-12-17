@@ -43,6 +43,7 @@ $  endIf.examiner_file
 $ elseIfI.qubo_solve__arguments %key%==getQ
 $  set get_Q %val%
 $  ifE (not(sameas('%get_Q%','y'))and(not(sameas('%get_Q%','n')))) $abort 'Wrong flag for >getQ<. Valid options are [y,n]'
+$  eval stop_process sameas('%get_Q%','y')
 $ else.qubo_solve__arguments
 $  abort Unknown option `%key%`.
 $ endif.qubo_solve__arguments
@@ -571,11 +572,12 @@ elif '%method%' in ['classic', 'sdp']:
     const = P*b_vec.T@b_vec + P*case2_penalty_offset_factor + sum_fixed_obj_var_coeffs + sum_lower_bound_of_int_vars
     logging.debug(f"\nPenalty: {P} | Total Offset: {const}\n")
     Q = newobj + P*new_x
+    continue_forward = True
     #sparsity = 1.0 - (np.count_nonzero(Q) / float(Q.size))
     if '%get_Q%'.lower() == 'y':
         np.savetxt(fr'%modelName%_p{P:.0f}_c{const:.0f}.csv', Q, delimiter=",")
         logging.debug(f"\nExported Q matrix as >%modelName%_p{P:.0f}_c{const:.0f}.csv<\n")
-        exit(0)
+        continue_forward = False
     ### For producing the qs format for QUBOWL
     # non_zero_indices = np.tril_indices_from(Q)
     # non_zero_values = Q[non_zero_indices]
@@ -584,32 +586,34 @@ elif '%method%' in ['classic', 'sdp']:
     #     for i, j, value in zip(*non_zero_indices, non_zero_values):
     #         if value != 0:
     #             f.write(f"{i+1} {j+1} {value}\n")
-    Qdf = pd.DataFrame(Q, columns=list(A_coeff.columns), index=list(A_coeff.columns))
-    Qdf = Qdf.unstack()
-    Qdf = Qdf.reset_index()
-    Qdf = list(Qdf.itertuples(index=None, name=None))
-    
-    m = gt.Container()
-    qconst = gt.Parameter(m, "qconst", None, const, description="Constant term to offset the objective value to original")
-    if Qdf:
-        qi = gt.Set(m, "qi", records=A_coeff.columns, description="QUBO variables")
-        qd = gt.Parameter(m, "qd", [qi, qi], records=Qdf, description="Q matrix")
-        if '%method%' == 'sdp':
-            max_cut_var = qubo_to_maxcut(Q)
-            gt.Parameter(m, "c_sun", [qi], records=list(zip(A_coeff.columns, max_cut_var)), description="extra variable for max cut transformation, ")
+    if continue_forward:
+        Qdf = pd.DataFrame(Q, columns=list(A_coeff.columns), index=list(A_coeff.columns))
+        Qdf = Qdf.unstack()
+        Qdf = Qdf.reset_index()
+        Qdf = list(Qdf.itertuples(index=None, name=None))
+        
+        m = gt.Container()
+        qconst = gt.Parameter(m, "qconst", None, const, description="Constant term to offset the objective value to original")
+        if Qdf:
+            qi = gt.Set(m, "qi", records=A_coeff.columns, description="QUBO variables")
+            qd = gt.Parameter(m, "qd", [qi, qi], records=Qdf, description="Q matrix")
+            if '%method%' == 'sdp':
+                max_cut_var = qubo_to_maxcut(Q)
+                gt.Parameter(m, "c_sun", [qi], records=list(zip(A_coeff.columns, max_cut_var)), description="extra variable for max cut transformation, ")
+            else:
+                max_cut_var = np.zeros((len(A_coeff.columns),1))
+                gt.Parameter(m, "c_sun", [qi], records=list(zip(A_coeff.columns, max_cut_var)), description="extra variable for max cut transformation, all set to zero since SDP method is not chosen.")
         else:
-            max_cut_var = np.zeros((len(A_coeff.columns),1))
-            gt.Parameter(m, "c_sun", [qi], records=list(zip(A_coeff.columns, max_cut_var)), description="extra variable for max cut transformation, all set to zero since SDP method is not chosen.")
-    else:
-        qi = gt.Set(m, "qi", records=['all_variables_fixed'], description="QUBO variables")
-        qd = gt.Parameter(m, "qd", [qi, qi], records=[('all_variables_fixed', 'all_variables_fixed', 0)], description="Q matrix")
-        if '%method%' == 'sdp':
-            raise Exception("All variables are fixed. Q matrix is Empty. Quitting SDP SOLVE.")
-    m.write('qout_%modelName%.gdx')
+            qi = gt.Set(m, "qi", records=['all_variables_fixed'], description="QUBO variables")
+            qd = gt.Parameter(m, "qd", [qi, qi], records=[('all_variables_fixed', 'all_variables_fixed', 0)], description="Q matrix")
+            if '%method%' == 'sdp':
+                raise Exception("All variables are fixed. Q matrix is Empty. Quitting SDP SOLVE.")
+        m.write('qout_%modelName%.gdx')
 endEmbeddedCode
-put_utility$(%log_on% > 1) 'log' / 'Reformulation complete. The Q matrix should be available in qout_%modelName%.gdx';
 
 abort$execError 'Error occured in Reformulation!';
+put_utility$(%log_on% > 1) 'log' / 'Reformulation complete. The Q matrix should be available in qout_%modelName%.gdx';
+abort.noError$[%stop_process%] '--getQ=Y. Skipping rest of the code.';
 
 * Solve the QUBO using a miqcp
 $ifThenE.method sameas('%method%','classic')
