@@ -16,7 +16,8 @@ $set timeLimit 10
 $eval num_threads min(8,numcores)
 $set log_on 0
 $set examinerOn 0
-$set getQ "n"
+$set get_Q "n"
+$set stop_process 0
 
 $label ProcessNamedArguments
 $ splitOption "%1" key val
